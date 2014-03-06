@@ -1,8 +1,4 @@
-"""The runtime machinery for the XBlock workbench.
-
-Code in this file is a mix of Runtime layer and Workbench layer.
-
-"""
+"""A very basic toy runtime for XBlock tests."""
 from collections import defaultdict, OrderedDict
 import itertools
 import logging
@@ -12,11 +8,6 @@ try:
 except ImportError:
     import json
 
-from django.core.urlresolvers import reverse
-from django.templatetags.static import static
-from django.template import loader as django_template_loader, \
-    Context as DjangoContext
-
 from xblock.fields import Scope
 from xblock.runtime import (
     KvsFieldData, KeyValueStore, Runtime, NoSuchViewError, IdReader, IdGenerator
@@ -24,41 +15,40 @@ from xblock.runtime import (
 from xblock.exceptions import NoSuchDefinition, NoSuchUsage
 from xblock.fragment import Fragment
 
-from .models import XBlockState
-from .util import make_safe_for_html
-
 log = logging.getLogger(__name__)
 
 
-class WorkbenchDjangoKeyValueStore(KeyValueStore):
-    """A Django model backed `KeyValueStore` for the Workbench to use.
+class ToyRuntimeKeyValueStore(KeyValueStore):
+    """A `KeyValueStore` for the ToyRuntime to use.
 
-    If you use this key-value store, you *must* use `ScenarioIdManager` or
-    another ID Manager that uses the scope_id convention:
+    This is a simple `KeyValueStore` which stores everything in a dictionary.
+    The key mapping is a little complicated to make it somewhat possible to
+    read the dict when it is rendered in the browser.
 
-      {scenario-slug}.{block_type}.d{def #}(.u{usage #})
-
-    So an example: a-little-html.html.d0.u0
-
-    We store all fields for a given (scope, scope_id, user_id) in one JSON blob,
-    rather than having a single row for each field name. This is why there's
-    some JSON packing/unpacking code.
     """
-    # Workbench-special methods.
+    def __init__(self, db_dict):
+        super(ToyRuntimeKeyValueStore, self).__init__()
+        self.db_dict = db_dict
+
+    # ToyRuntime-special methods.
+
     def clear(self):
         """Clear all data from the store."""
-        XBlockState.objects.all().delete()
+        self.db_dict.clear()
 
-    def prep_for_scenario_loading(self):
-        """Reset any state that's necessary before we load scenarios."""
-        XBlockState.prep_for_scenario_loading()
+    def as_html(self):
+        """Render the key value store to HTML."""
+        html = json.dumps(self.db_dict, sort_keys=True, indent=4)
+        return html
 
     # Implementation details.
+
     def _actual_key(self, key):
         """
         Constructs the full key name from the given `key`.
 
         The actual key consists of the scope, block scope id, and user_id.
+
         """
         key_list = []
         if key.scope == Scope.children:
@@ -74,38 +64,32 @@ class WorkbenchDjangoKeyValueStore(KeyValueStore):
             key_list.append(key.user_id)
         return ".".join(key_list)
 
-    @staticmethod
-    def _to_json_str(data):
-        return json.dumps(data, indent=2, sort_keys=True)
-
     # KeyValueStore methods.
+
     def get(self, key):
-        """Get state for a given `KeyValueStore.Key`."""
-        record = XBlockState.get_for_key(key)
-        return json.loads(record.state)[key.field_name]
+        return self.db_dict[self._actual_key(key)][key.field_name]
 
     def set(self, key, value):
-        """Set state for a given `KeyValueStore.Key` to `value`."""
-        record = XBlockState.get_for_key(key)
-        state_dict = json.loads(record.state)
-        state_dict[key.field_name] = value
-
-        record.state = self._to_json_str(state_dict)
-        record.save()
+        """Sets the key to the new value"""
+        self.db_dict.setdefault(self._actual_key(key), {})[key.field_name] = value
 
     def delete(self, key):
-        """Delete state for a given `KeyValueStore.Key`."""
-        record = XBlockState.get_for_key(key)
-        state_dict = json.loads(record.state)
-        del state_dict[key.field_name]
-        record.state = self._to_json_str(state_dict)
-        record.save()
+        del self.db_dict[self._actual_key(key)][key.field_name]
 
     def has(self, key):
-        """Check if an entry exists for `KeyValueStore.Key`."""
-        record = XBlockState.get_for_key(key)
-        state_dict = json.loads(record.state)
-        return key.field_name in state_dict
+        return key.field_name in self.db_dict[self._actual_key(key)]
+
+    def set_many(self, update_dict):
+        """
+        Sets many fields to new values in one call.
+
+        `update_dict`: A dictionary of keys: values.
+        This method sets the value of each key to the specified new value.
+        """
+        for key, value in update_dict.items():
+            # We just call `set` directly here, because this is an in-memory representation
+            # thus we don't concern ourselves with bulk writes.
+            self.set(key, value)
 
 
 class ScenarioIdManager(IdReader, IdGenerator):
@@ -171,24 +155,10 @@ class ScenarioIdManager(IdReader, IdGenerator):
         except KeyError:
             raise NoSuchDefinition(repr(def_id))
 
-    # Workbench specific functionality
-    def set_scenario(self, scenario):
-        """Call this before loading a scenario so that this `ScenarioIdManager`
-        knows what to prefix the IDs with. This helps isolate scenarios from
-        each other so that changes in one will not affect ID numbers in another.
-        """
-        self.scenario = scenario
 
-    def last_created_usage_id(self):
-        """Sometimes you create a usage for testing and just want to grab it
-        back. This gives an easy hook to do that.
-        """
-        return self._usages.keys()[-1] if self._usages else None
-
-
-class WorkbenchRuntime(Runtime):
+class ToyRuntime(Runtime):
     """
-    Access to the workbench runtime environment for XBlocks.
+    Access to the toy runtime environment for XBlocks.
 
     A pre-configured instance of this class will be available to XBlocks as
     `self.runtime`.
@@ -196,23 +166,15 @@ class WorkbenchRuntime(Runtime):
     """
 
     def __init__(self, user_id=None):
-        super(WorkbenchRuntime, self).__init__(ID_MANAGER, KvsFieldData(WORKBENCH_KVS))
+        super(ToyRuntime, self).__init__(ID_MANAGER, KvsFieldData(TOYRUNTIME_KVS))
         self.id_generator = ID_MANAGER
         self.user_id = user_id
-
-    def render(self, block, view_name, context=None):
-        try:
-            return super(WorkbenchRuntime, self).render(block, view_name, context)
-        except NoSuchViewError:
-            return Fragment(u"<i>No such view: %s on %s</i>"
-                            % (view_name, make_safe_for_html(repr(block))))
 
     # TODO: [rocha] runtime should not provide this, each xblock
     # should use whatever they want
     def render_template(self, template_name, **kwargs):
-        """Loads the django template for `template_name`"""
-        template = django_template_loader.get_template(template_name)
-        return template.render(DjangoContext(kwargs))
+        """Mock for rendering templates"""
+        return template_name
 
     def wrap_child(self, block, view, frag, context):  # pylint: disable=W0613
         wrapped = Fragment()
@@ -246,10 +208,7 @@ class WorkbenchRuntime(Runtime):
         if not getattr(func, "_is_xblock_handler", False):
             raise ValueError("{!r} is not a handler name".format(handler_name))
 
-        url = reverse(
-            "unauth_handler" if thirdparty else "handler",
-            args=(block.scope_ids.usage_id, handler_name, suffix)
-        )
+        url = ''
 
         has_query = False
         if not thirdparty:
@@ -261,10 +220,10 @@ class WorkbenchRuntime(Runtime):
         return url
 
     def resource_url(self, resource):
-        return static("workbench/" + resource)
+        return "toyruntime/" + resource
 
     def local_resource_url(self, block, uri):
-        return reverse("package_resource", args=(block.scope_ids.block_type, uri))
+        return ''
 
     def publish(self, block, event):
         log.info("XBlock event for {block_type} (usage_id={usage_id}):".format(
@@ -332,7 +291,7 @@ class _BlockSet(object):
                 yield getattr(block, attr_name)
 
 # Our global state (the "database").
-WORKBENCH_KVS = WorkbenchDjangoKeyValueStore()
+TOYRUNTIME_KVS = ToyRuntimeKeyValueStore(dict())
 
 # Our global id manager
 ID_MANAGER = ScenarioIdManager()
@@ -340,13 +299,10 @@ ID_MANAGER = ScenarioIdManager()
 
 def reset_global_state():
     """
-    Reset any global state in the workbench.
+    Reset any global state in the toy runtime.
 
     This allows us to write properly isolated tests.
 
     """
-    from .scenarios import init_scenarios       # avoid circularity.
-
-    WORKBENCH_KVS.clear()
+    TOYRUNTIME_KVS.clear()
     ID_MANAGER.clear()
-    init_scenarios()

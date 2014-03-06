@@ -25,6 +25,3 @@ cookiecutter
 
 # Our own XBlocks
 -e .
--e workbench
--e thumbs
--e demo_xblocks
