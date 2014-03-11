@@ -8,11 +8,14 @@ Tests for classes extending Field.
 from mock import MagicMock, Mock
 import unittest
 
+import datetime as dt
+import pytz
+
 from xblock.core import XBlock, Scope
 from xblock.field_data import DictFieldData
 from xblock.fields import (
     Any, Boolean, Dict, Field, Float,
-    Integer, List, String, Reference, ReferenceList, Sentinel
+    Integer, List, String, DateTime, Reference, ReferenceList, Sentinel
 )
 
 from xblock.test.tools import assert_equals, assert_not_equals, assert_not_in
@@ -156,6 +159,49 @@ class StringTest(FieldTest):
         self.assertJSONTypeError([1])
         self.assertJSONTypeError([])
         self.assertJSONTypeError({})
+
+
+class DateTest(FieldTest):
+    """
+    Tests of the Date field.
+    """
+    field_totest = DateTime
+
+    def test_json_equals(self):
+        self.assertJSONEquals(
+            dt.datetime(2014, 4, 1).replace(tzinfo=pytz.utc), '2014-04-01'
+        )
+        self.assertJSONEquals(
+            dt.datetime(2014, 4, 1, 2, 3, 4, 5).replace(tzinfo=pytz.utc),
+            '2014-04-01T02:03:04.000005+00:00'
+        )
+        self.assertJSONEquals(
+            dt.datetime(2014, 4, 1).replace(tzinfo=pytz.utc), '2014-04-01T00:00:00+00:00'
+        )
+        self.assertJSONEquals(
+            dt.datetime(2014, 4, 1).replace(tzinfo=pytz.timezone('US/Pacific')),
+            '2014-04-01T08:00:00+00:00'
+        )
+
+    def test_serialize(self):
+        serialized = DateTime().to_json(dt.datetime(2014, 4, 1).replace(tzinfo=pytz.utc))
+        self.assertEqual(serialized, '2014-04-01T00:00:00+00:00')
+
+    def test_none(self):
+        self.assertJSONEquals(None, None)
+        self.assertEqual(DateTime().to_json(None), None)
+
+    def test_error(self):
+        self.assertJSONTypeError(['a'])
+        self.assertJSONTypeError('')
+        self.assertJSONTypeError('invalid')
+        self.assertJSONTypeError(dt.datetime.now())
+        self.assertJSONTypeError(5)
+        self.assertJSONTypeError(5.123)
+
+    def test_serialize_error(self):
+        with self.assertRaises(TypeError):
+            DateTime().to_json('a')
 
 
 class AnyTest(FieldTest):

@@ -5,6 +5,8 @@ requests
 webob
 WSGIProxy
 simplejson
+python-dateutil
+pytz
 
 # For Tests
 mock

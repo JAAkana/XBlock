@@ -7,7 +7,10 @@ for each scope.
 """
 
 import copy
+import datetime
 from collections import namedtuple
+import dateutil.parser
+import pytz
 
 
 # __all__ controls what classes end up in the docs, and in what order.
@@ -593,6 +596,52 @@ class String(Field):
             return value
         else:
             raise TypeError('Value stored in a String must be None or a string, found %s' % type(value))
+
+
+class DateTime(Field):
+    """
+    A field for representing a datetime.
+
+    The stored value is either a datetime or None.
+    """
+
+    def from_json(self, value):
+        """
+        Parse the date from a string value, or None.
+        """
+        if isinstance(value, basestring):
+
+            # Default parser will interpret an empty string as the current time.
+            if not value:
+                raise TypeError("Value cannot be an empty string.")
+
+            try:
+                datetime_val = dateutil.parser.parse(value)
+            except ValueError:
+                raise TypeError("Could not parse date string '{}'.".format(value))
+
+            # If the date is not timezone aware, assume UTC
+            if datetime_val.tzinfo is None:  # pylint: disable=E1103
+                return datetime_val.replace(tzinfo=pytz.utc)  # pylint: disable=E1103
+
+            # If the date is timezone aware, convert it to UTC
+            else:
+                return datetime_val.astimezone(pytz.utc)  # pylint: disable=E1103
+
+        if value is None:
+            return None
+
+        raise TypeError("Value should be loaded from a string, not {}".format(type(value)))
+
+    def to_json(self, value):
+        """
+        Serialize the date as an ISO-formatted date string, or None.
+        """
+        if isinstance(value, datetime.datetime):
+            return value.isoformat()
+        if value is None:
+            return None
+        raise TypeError("Value stored must be a datetime object, not {}".format(type(value)))
 
 
 class Any(Field):
